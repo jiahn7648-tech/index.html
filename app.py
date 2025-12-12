@@ -3,29 +3,45 @@ import streamlit.components.v1 as components
 import base64
 
 # 1. 페이지 설정
-st.set_page_config(page_title="3D 큐브 텍스처 앱", layout="wide")
+st.set_page_config(page_title="3D 도형 변신 앱", layout="wide")
 
-st.title("🖼️ 나만의 사진으로 3D 큐브 만들기")
-st.write("이미지를 업로드하면 큐브의 표면이 바뀝니다!")
+# 2. 사이드바 UI 구성
+st.sidebar.title("🛠️ 설정")
 
-# 2. 파일 업로더 추가
-uploaded_file = st.file_uploader("이미지 파일을 선택하세요 (jpg, png)", type=['png', 'jpg', 'jpeg'])
+# 도형 선택 버튼 (라디오 버튼 사용)
+selected_shape = st.sidebar.radio(
+    "도형 모양을 선택하세요:",
+    ("정육면체 (Cube)", "구 (Sphere)", "사각기둥 (Box)", "원기둥 (Cylinder)", "각뿔 (Pyramid)")
+)
 
-# 3. 이미지가 있으면 Base64 문자열로 변환, 없으면 null 처리
-texture_data = "null"
+# 이미지 업로드 버튼
+uploaded_file = st.sidebar.file_uploader("텍스처 이미지 업로드", type=['png', 'jpg', 'jpeg'])
+
+st.title(f"🧊 {selected_shape} 뷰어")
+st.write("왼쪽 사이드바에서 도형을 바꾸거나 사진을 입혀보세요!")
+
+# 3. 이미지 데이터 처리 (Base64 변환)
+texture_data = "null" # 기본값 (이미지 없음)
 
 if uploaded_file is not None:
-    # 파일을 읽어서 바이트로 변환
     bytes_data = uploaded_file.getvalue()
-    # 바이트를 base64 문자열로 인코딩
     base64_str = base64.b64encode(bytes_data).decode()
-    # 자바스크립트에서 쓸 수 있는 포맷으로 가공
     mime_type = uploaded_file.type
     texture_data = f"'data:{mime_type};base64,{base64_str}'"
 
-# 4. HTML/JS 코드 작성 (f-string을 사용하여 texture_data 변수를 주입)
-# 주의: f-string 내부에서는 자바스크립트의 중괄호 {}를 {{}}로 두 번 써야 에러가 안 납니다.
-cube_html = f"""
+# 4. 도형 종류를 JS로 넘기기 위한 문자열 매핑
+# 파이썬의 선택값을 자바스크립트가 알아들을 수 있는 영문 키워드로 변환
+shape_map = {
+    "정육면체 (Cube)": "cube",
+    "구 (Sphere)": "sphere",
+    "사각기둥 (Box)": "rect",
+    "원기둥 (Cylinder)": "cylinder",
+    "각뿔 (Pyramid)": "pyramid"
+}
+current_shape = shape_map[selected_shape]
+
+# 5. HTML/JS 코드 (Three.js)
+html_code = f"""
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -47,52 +63,83 @@ cube_html = f"""
         import * as THREE from 'three';
         import {{ OrbitControls }} from 'three/addons/controls/OrbitControls.js';
 
-        // --- 파이썬에서 전달받은 이미지 데이터 ---
-        const textureUrl = {texture_data}; 
+        // --- 파이썬에서 받은 변수들 ---
+        const shapeType = '{current_shape}';  // 도형 종류
+        const textureUrl = {texture_data};    // 이미지 데이터
 
+        // --- 씬 설정 ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x0E1117);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.z = 4;
+        camera.position.z = 4.5;
 
         const renderer = new THREE.WebGLRenderer({{ antialias: true }});
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-        
-        // --- 텍스처 로직 변경 부분 ---
-        let material;
+        // --- 조명 추가 (이미지가 더 잘 보이게) ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1); // 전체 조명
+        scene.add(ambientLight);
 
-        if (textureUrl) {{
-            // 1. 이미지가 있으면: 텍스처 로더를 사용해 이미지를 입힘
-            const loader = new THREE.TextureLoader();
-            const texture = loader.load(textureUrl);
-            // 색상 왜곡 방지를 위해 색 공간 설정 (선택사항)
-            texture.colorSpace = THREE.SRGBColorSpace; 
-            
-            // MeshBasicMaterial은 빛이 없어도 이미지가 선명하게 보임
-            material = new THREE.MeshBasicMaterial({{ map: texture }});
-        }} else {{
-            // 2. 이미지가 없으면: 기존의 알록달록한 재질 사용
-            material = new THREE.MeshNormalMaterial();
+        // --- 도형 생성 로직 (Switch 문) ---
+        let geometry;
+
+        switch (shapeType) {{
+            case 'cube':
+                geometry = new THREE.BoxGeometry(2, 2, 2); // 정육면체
+                break;
+            case 'sphere':
+                geometry = new THREE.SphereGeometry(1.5, 32, 32); // 구 (매끈하게)
+                break;
+            case 'rect':
+                geometry = new THREE.BoxGeometry(1.5, 3, 1.5); // 사각기둥 (길쭉하게)
+                break;
+            case 'cylinder':
+                geometry = new THREE.CylinderGeometry(1, 1, 3, 32); // 원기둥
+                break;
+            case 'pyramid':
+                // ConeGeometry에서 면(radialSegments)을 4로 하면 피라미드가 됨
+                geometry = new THREE.ConeGeometry(1.8, 2.5, 4); 
+                break;
+            default:
+                geometry = new THREE.BoxGeometry(2, 2, 2);
         }}
 
-        const cube = new THREE.Mesh(geometry, material);
-        scene.add(cube);
+        // --- 재질(텍스처) 설정 로직 ---
+        let material;
+        if (textureUrl) {{
+            // 이미지가 있을 때
+            const loader = new THREE.TextureLoader();
+            const texture = loader.load(textureUrl);
+            texture.colorSpace = THREE.SRGBColorSpace;
+            material = new THREE.MeshBasicMaterial({{ map: texture }});
+        }} else {{
+            // 이미지가 없을 때 (기본 무지개색)
+            material = new THREE.MeshNormalMaterial(); 
+        }}
 
+        // --- 메쉬 생성 및 추가 ---
+        const mesh = new THREE.Mesh(geometry, material);
+        scene.add(mesh);
+
+        // --- 컨트롤 설정 ---
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
 
+        // --- 애니메이션 ---
         function animate() {{
             requestAnimationFrame(animate);
-            cube.rotation.x += 0.005;
-            cube.rotation.y += 0.005;
+            
+            // 살짝 회전
+            mesh.rotation.x += 0.005;
+            mesh.rotation.y += 0.005;
+
             controls.update();
             renderer.render(scene, camera);
         }}
-        
+
+        // --- 반응형 창 크기 ---
         window.addEventListener('resize', function() {{
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
@@ -105,5 +152,5 @@ cube_html = f"""
 </html>
 """
 
-# 5. 스트림릿 화면에 렌더링
-components.html(cube_html, height=600)
+# 6. 화면 출력
+components.html(html_code, height=700)
